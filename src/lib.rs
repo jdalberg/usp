@@ -21,6 +21,23 @@ pub struct UspRecord {
     record_type: Option<usp_record::record::RecordType>,
 }
 
+impl TryFrom<Vec<u8>> for UspRecord {
+    type Error = UspError;
+
+    fn try_from(encoded: Vec<u8>) -> Result<Self, Self::Error> {
+        let record = usp_record::Record::decode(&*encoded)?;
+        Ok(UspRecord {
+            version: record.version,
+            to_id: Some(record.to_id),
+            from_id: record.from_id,
+            payload_security: record.payload_security,
+            mac_signature: record.mac_signature,
+            sender_cert: record.sender_cert,
+            record_type: record.record_type,
+        })
+    }
+}
+
 impl UspRecord {
     /// Create a new UspRecord instance
     ///
@@ -93,12 +110,12 @@ impl UspRecord {
         Ok(record.encode_to_vec())
     }
 
-    pub fn get(&mut self, to_id: &str, path: &[&str]) -> Result<Vec<u8>, UspError> {
+    pub fn get(&mut self, to_id: &str, msg_id: &str, path: &[&str]) -> Result<Vec<u8>, UspError> {
         let paths: Vec<String> = path.iter().map(|&p| p.to_string()).collect();
         let get = usp::Get { param_paths: paths };
         let get_msg = usp::Msg {
             header: Some(usp::Header {
-                msg_id: to_id.to_string(),
+                msg_id: msg_id.to_string(),
                 msg_type: usp::header::MsgType::Get as i32,
             }),
             body: Some(usp::Body {
@@ -212,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn test_record_creation_and_encoding() {
+    fn test_record_creation_encoding_and_decoding() {
         let version = "1.0".to_string();
         let from_id = "controller456".to_string();
         let payload_security = usp_record::record::PayloadSecurity::Plaintext as i32;
@@ -227,7 +244,7 @@ mod tests {
         );
 
         let encoded_get = usp_record
-            .get("device123", &["example.path"])
+            .get("device123", "12345", &["example.path"])
             .expect("Failed to encode Get request");
 
         let body = decode_and_assert(
@@ -235,7 +252,7 @@ mod tests {
             "device123",
             "controller456",
             header::MsgType::Get,
-            "device123",
+            "12345",
         );
         assert!(body.msg_body.is_some());
         if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
@@ -246,6 +263,65 @@ mod tests {
             }
         } else {
             panic!("Expected Request MsgBody");
+        }
+    }
+
+    #[test]
+    fn test_record_creation_and_decoding() {
+        let version = "1.0".to_string();
+        let from_id = "controller456".to_string();
+        let payload_security = usp_record::record::PayloadSecurity::Plaintext as i32;
+        let mac_signature = vec![0x01, 0x02, 0x03];
+        let sender_cert = vec![0x04, 0x05, 0x06];
+        let mut usp_record = UspRecord::new(
+            version,
+            from_id,
+            payload_security,
+            mac_signature,
+            sender_cert,
+        );
+
+        let encoded_get = usp_record
+            .get("device123", "12345", &["example.path"])
+            .expect("Failed to encode Get request");
+
+        let decoded_record =
+            UspRecord::try_from(encoded_get.clone()).expect("Failed to decode record");
+
+        assert_eq!(decoded_record.version, "1.0");
+        assert_eq!(decoded_record.to_id.unwrap(), "device123");
+        assert_eq!(decoded_record.from_id, "controller456");
+        assert_eq!(
+            decoded_record.payload_security,
+            usp_record::record::PayloadSecurity::Plaintext as i32
+        );
+        assert_eq!(decoded_record.mac_signature, vec![0x01, 0x02, 0x03]);
+        assert_eq!(decoded_record.sender_cert, vec![0x04, 0x05, 0x06]);
+
+        if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) =
+            decoded_record.record_type
+        {
+            match usp::Msg::decode(&ns_record.payload[..]) {
+                Ok(usp_msg) => {
+                    let header = usp_msg.header.expect("Header should be present");
+                    let body = usp_msg.body.expect("Body should be present");
+                    assert_eq!(header.msg_type, header::MsgType::Get as i32);
+                    assert_eq!(header.msg_id, "12345");
+                    assert!(body.msg_body.is_some());
+                    if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
+                        if let Some(usp::request::ReqType::Get(get)) = req.req_type {
+                            assert_eq!(get.param_paths, vec!["example.path".to_string()]);
+                        } else {
+                            panic!("Expected Get request type");
+                        }
+                    } else {
+                        panic!("Expected Request MsgBody");
+                    }
+                }
+                Err(e) => panic!("❌ Failed to decode USP Msg: {:?}", e),
+            }
+        } else {
+            panic!("Expected NoSessionContextRecord");
         }
     }
 }
