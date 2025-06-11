@@ -115,34 +115,47 @@ impl UspRecord {
     }
 }
 
-pub fn get_message(
-    msg_id: &str,
-    msg_type: usp::header::MsgType,
-    req_type: usp::request::ReqType,
-) -> usp::Msg {
-    usp::Msg {
-        header: Some(usp::Header {
-            msg_id: msg_id.to_string(),
-            msg_type: msg_type as i32,
-        }),
-        body: Some(usp::Body {
-            msg_body: Some(usp::body::MsgBody::Request(usp::Request {
-                req_type: Some(req_type),
-            })),
-        }),
-    }
-}
-
-pub fn get_record(to_id: &str, msg_id: &str, param_paths: Vec<String>) -> usp::Get {
-    usp::Get { param_paths }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::usp::{body, header};
+    use crate::usp::header;
 
     use super::*;
     use prost::Message;
+
+    fn decode_and_assert(
+        encoded: &[u8],
+        expected_to_id: &str,
+        expected_from_id: &str,
+        expected_msg_type: header::MsgType,
+        expected_msg_id: &str,
+    ) -> usp::Body {
+        let decoded_record = usp_record::Record::decode(&*encoded).expect("Decoding failed");
+        assert_eq!(decoded_record.version, "1.0");
+        assert_eq!(decoded_record.to_id, expected_to_id);
+        assert_eq!(decoded_record.from_id, expected_from_id);
+        assert_eq!(
+            decoded_record.payload_security,
+            usp_record::record::PayloadSecurity::Plaintext as i32
+        );
+        assert_eq!(decoded_record.mac_signature, vec![0x01, 0x02, 0x03]);
+        assert_eq!(decoded_record.sender_cert, vec![0x04, 0x05, 0x06]);
+        if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) =
+            decoded_record.record_type
+        {
+            match usp::Msg::decode(&ns_record.payload[..]) {
+                Ok(usp_msg) => {
+                    let header = usp_msg.header.expect("Header should be present");
+                    let body = usp_msg.body.expect("Body should be present");
+                    assert_eq!(header.msg_type, expected_msg_type as i32);
+                    assert_eq!(header.msg_id, expected_msg_id);
+                    return body;
+                }
+                Err(e) => panic!("❌ Failed to decode USP Msg: {:?}", e),
+            }
+        } else {
+            panic!("Expected NoSessionContextRecord");
+        }
+    }
 
     #[test]
     fn test_protobuf_inclusion() {
@@ -179,40 +192,22 @@ mod tests {
 
         let encoded_record = record.encode_to_vec();
 
-        let decoded_record = usp_record::Record::decode(&*encoded_record).expect("Decoding failed");
-        assert_eq!(decoded_record.version, "1.0");
-        assert_eq!(decoded_record.to_id, "device123");
-        assert_eq!(decoded_record.from_id, "controller456");
-        assert_eq!(
-            decoded_record.payload_security,
-            usp_record::record::PayloadSecurity::Plaintext as i32
+        let body = decode_and_assert(
+            &encoded_record,
+            "device123",
+            "controller456",
+            header::MsgType::Get,
+            "12345",
         );
-        assert_eq!(decoded_record.mac_signature, vec![0x01, 0x02, 0x03]);
-        assert_eq!(decoded_record.sender_cert, vec![0x04, 0x05, 0x06]);
-        if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) =
-            decoded_record.record_type
-        {
-            assert_eq!(ns_record.payload, get_msg_vec);
-            match usp::Msg::decode(&ns_record.payload[..]) {
-                Ok(usp_msg) => {
-                    let header = usp_msg.header.expect("Header should be present");
-                    let body = usp_msg.body.expect("Body should be present");
-                    assert_eq!(header.msg_type, header::MsgType::Get as i32);
-                    assert_eq!(header.msg_id, "12345");
-                    if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
-                        if let Some(usp::request::ReqType::Get(get_req)) = req.req_type {
-                            assert_eq!(get_req.param_paths, vec!["example.path".to_string()]);
-                        } else {
-                            panic!("Expected Get request type");
-                        }
-                    } else {
-                        panic!("Expected MsgBody to be Request");
-                    }
-                }
-                Err(e) => panic!("❌ Failed to decode USP Msg: {:?}", e),
+        assert!(body.msg_body.is_some());
+        if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
+            if let Some(usp::request::ReqType::Get(get)) = req.req_type {
+                assert_eq!(get.param_paths, vec!["example.path".to_string()]);
+            } else {
+                panic!("Expected Get request type");
             }
         } else {
-            panic!("Expected NoSessionContextRecord");
+            panic!("Expected Request MsgBody");
         }
     }
 
@@ -230,13 +225,27 @@ mod tests {
             mac_signature,
             sender_cert,
         );
-        let to_id = "device123";
-        let record_type =
-            usp_record::record::RecordType::NoSessionContext(usp_record::NoSessionContextRecord {
-                payload: vec![],
-            });
-        let encoded_record = usp_record
-            .encode_record(to_id, &record_type)
-            .expect("Failed to encode record");
+
+        let encoded_get = usp_record
+            .get("device123", &["example.path"])
+            .expect("Failed to encode Get request");
+
+        let body = decode_and_assert(
+            &encoded_get,
+            "device123",
+            "controller456",
+            header::MsgType::Get,
+            "device123",
+        );
+        assert!(body.msg_body.is_some());
+        if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
+            if let Some(usp::request::ReqType::Get(get)) = req.req_type {
+                assert_eq!(get.param_paths, vec!["example.path".to_string()]);
+            } else {
+                panic!("Expected Get request type");
+            }
+        } else {
+            panic!("Expected Request MsgBody");
+        }
     }
 }
