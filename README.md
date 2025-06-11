@@ -10,8 +10,7 @@ This is just an example to show the the UspRecord struct can be created.
 
 You are either a Controller or an Agent, never both. If you were, you would have 2 UspRecord.
 
-```
-        
+```rust        
     let version = "1.0".to_string();
     let from_id = "controller456".to_string();
     let payload_security = usp_record::record::PayloadSecurity::Plaintext as i32;
@@ -37,7 +36,7 @@ You are either a Controller or an Agent, never both. If you were, you would have
 
 Decode a record retrieved from MQTT.
 
-```
+```rust
 let decoded_record = usp_record::Record::decode(&*encoded_record).expect("Decoding failed");
 assert_eq!(decoded_record.version, "1.0");
 assert_eq!(decoded_record.to_id, "device123");
