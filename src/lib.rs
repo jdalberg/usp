@@ -1,5 +1,5 @@
 use crate::error::UspError;
-use prost::Message;
+use prost::{Message, bytes::Bytes};
 
 pub mod error;
 
@@ -11,6 +11,7 @@ pub mod usp_record {
     include!(concat!(env!("OUT_DIR"), "/usp_record.rs"));
 }
 
+#[derive(Debug)]
 pub struct UspRecord {
     version: String,
     to_id: Option<String>,
@@ -18,13 +19,47 @@ pub struct UspRecord {
     payload_security: i32,
     mac_signature: Vec<u8>,
     sender_cert: Vec<u8>,
-    record_type: Option<usp_record::record::RecordType>,
+    pub record_type: Option<usp_record::record::RecordType>,
+}
+
+impl TryFrom<&[u8]> for UspRecord {
+    type Error = UspError;
+
+    fn try_from(encoded: &[u8]) -> Result<Self, Self::Error> {
+        let record = usp_record::Record::decode(&*encoded)?;
+        Ok(UspRecord {
+            version: record.version,
+            to_id: Some(record.to_id),
+            from_id: record.from_id,
+            payload_security: record.payload_security,
+            mac_signature: record.mac_signature,
+            sender_cert: record.sender_cert,
+            record_type: record.record_type,
+        })
+    }
 }
 
 impl TryFrom<Vec<u8>> for UspRecord {
     type Error = UspError;
 
     fn try_from(encoded: Vec<u8>) -> Result<Self, Self::Error> {
+        let record = usp_record::Record::decode(&*encoded)?;
+        Ok(UspRecord {
+            version: record.version,
+            to_id: Some(record.to_id),
+            from_id: record.from_id,
+            payload_security: record.payload_security,
+            mac_signature: record.mac_signature,
+            sender_cert: record.sender_cert,
+            record_type: record.record_type,
+        })
+    }
+}
+
+impl TryFrom<Bytes> for UspRecord {
+    type Error = UspError;
+
+    fn try_from(encoded: Bytes) -> Result<Self, Self::Error> {
         let record = usp_record::Record::decode(&*encoded)?;
         Ok(UspRecord {
             version: record.version,
@@ -88,6 +123,14 @@ impl UspRecord {
         Ok(())
     }
 
+    pub fn to_id(&self) -> Option<&str> {
+        self.to_id.as_deref()
+    }
+
+    pub fn from_id(&self) -> &str {
+        &self.from_id
+    }
+
     pub fn encode_record(
         &mut self,
         to_id: &str,
@@ -130,6 +173,10 @@ impl UspRecord {
             });
         self.encode_record(to_id, &record_type)
     }
+}
+
+pub fn decode_payload(encoded: &[u8]) -> Result<usp::Msg, UspError> {
+    usp::Msg::decode(&*encoded).map_err(|e| UspError::DecodeError(e))
 }
 
 #[cfg(test)]
