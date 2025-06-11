@@ -6,28 +6,33 @@ This package can decode and encode usp records.
 
 Create a USP record that is ready for MQTT transport.
 
+This is just an example to show the the UspRecord struct can be created.
+
+You are either a Controller or an Agent, never both. If you were, you would have 2 UspRecord.
+
 ```
-let get = usp::Get {
-    param_paths: vec!["example.path".to_string()],
-};
-let get_vec = get.encode_to_vec();
+        
+    let version = "1.0".to_string();
+    let from_id = "controller456".to_string();
+    let payload_security = usp_record::record::PayloadSecurity::Plaintext as i32;
+    let mac_signature = vec![0x01, 0x02, 0x03];
+    let sender_cert = vec![0x04, 0x05, 0x06];
+    let mut usp_record = UspRecord::new(
+        version,
+        from_id,
+        payload_security,
+        mac_signature,
+        sender_cert,
+    );
 
-let record = usp_record::Record {
-    version: "1.0".to_string(),
-    to_id: String::from("device123"),
-    from_id: String::from("controller456"),
-    payload_security: usp_record::record::PayloadSecurity::Plaintext as i32,
-    mac_signature: vec![0x01, 0x02, 0x03],
-    sender_cert: vec![0x04, 0x05, 0x06],
-    record_type: Some(usp_record::record::RecordType::NoSessionContext(
-        usp_record::NoSessionContextRecord {
-            payload: get_vec.clone(),
-        },
-    )),
-};
+    // Now encode a message ready for the MTP
+    let encoded_get = usp_record
+        .get("device123", &["example.path"])
+        .expect("Failed to encode Get request");
 
-// encoded_record can not be transmitted on the MTP
-let encoded_record = record.encode_to_vec();
+    // this can now by sent to the MTP, i.e. MQTT or other
+    mtp.send(device_channel, &encoded_get);
+
 ```
 
 Decode a record retrieved from MQTT.
@@ -43,9 +48,27 @@ assert_eq!(
 );
 assert_eq!(decoded_record.mac_signature, vec![0x01, 0x02, 0x03]);
 assert_eq!(decoded_record.sender_cert, vec![0x04, 0x05, 0x06]);
-if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) = decoded_record.record_type {
-    let message = ns_record.decode();
-    assert_eq!(ns_record.payload, get_vec);
+
+if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) =
+            decoded_record.record_type {
+    match usp::Msg::decode(&ns_record.payload[..]) {
+        Ok(usp_msg) => {
+            let header = usp_msg.header.expect("Header should be present");
+            let body = usp_msg.body.expect("Body should be present");
+            assert_eq!(header.msg_type, header::MsgType::Get as i32);
+            // it could be Response too :)
+            if let Some(usp::body::MsgBody::Request(req)) = body.msg_body {
+                if let Some(usp::request::ReqType::Get(get)) = req.req_type {
+                    assert_eq!(get.param_paths, vec!["example.path".to_string()]);
+                } else {
+                    panic!("Expected Get request type");
+                }
+            } else {
+                panic!("Expected Request MsgBody");
+            }
+        }
+        Err(e) => panic!("❌ Failed to decode USP Msg: {:?}", e),
+    }
 } else {
     panic!("Expected NoSessionContextRecord");
 }
