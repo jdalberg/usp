@@ -7,5 +7,5 @@ pub enum UspError {
     #[error("Record type must be set before building the record")]
     RecordTypeNotSet,
     #[error(transparent)]
-    EncodeError(#[from] prost::DecodeError),
+    DecodeError(#[from] prost::DecodeError),
 }
