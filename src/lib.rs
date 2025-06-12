@@ -348,7 +348,7 @@ mod tests {
         if let Some(usp_record::record::RecordType::NoSessionContext(ns_record)) =
             decoded_record.record_type
         {
-            match usp::Msg::decode(&ns_record.payload[..]) {
+            match decode_payload(&ns_record.payload[..]) {
                 Ok(usp_msg) => {
                     let header = usp_msg.header.expect("Header should be present");
                     let body = usp_msg.body.expect("Body should be present");
